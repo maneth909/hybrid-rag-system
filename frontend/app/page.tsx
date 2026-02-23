@@ -12,7 +12,7 @@ export default function ChatbotUI() {
     <div className="flex h-screen w-full bg-background text-blackcolor font-sans overflow-hidden">
       <SidebarLeft />
       <ChatArea />
-      <SidebarRight />
+      <SidebarRight userId={userId} />
     </div>
   );
 }

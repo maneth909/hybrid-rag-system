@@ -112,3 +112,38 @@ def delete_document(document_id: str, user_id: str) -> bool:
             
             # Returns True if a file was actually found and deleted
             return deleted_id is not None
+        
+
+def search_similar_chunks(user_id: str, query_vector: List[float], top_k: int = 5, threshold: float = 0.3) -> List[dict]:
+    """
+    Finds the most similar chunks to a query vector using Cosine Distance (<=>).
+    Converts distance to similarity (1 - distance) and filters out low matches.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    c.content,
+                    d.filename,
+                    1 - (c.embedding <=> %s) as similarity
+                FROM chunks c
+                JOIN documents d ON c.document_id = d.id
+                WHERE d.user_id = %s
+                  AND 1 - (c.embedding <=> %s) >= %s
+                ORDER BY c.embedding <=> %s
+                LIMIT %s;
+                """,
+                # pass the vector 3 times because it's used in the SELECT, WHERE, and ORDER BY clauses
+                (query_vector, user_id, query_vector, threshold, query_vector, top_k)
+            )
+            rows = cur.fetchall()
+            
+            results = []
+            for row in rows:
+                results.append({
+                    "content": row[0],
+                    "filename": row[1],
+                    "similarity": round(row[2], 3)
+                })
+            return results
