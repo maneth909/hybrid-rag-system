@@ -65,7 +65,7 @@ def save_ingestion_data(
             
 
 def get_all_documents(user_id: str) -> List[dict]:
-    """Fetches all documents uploaded by a specific user."""
+    # Fetches all documents uploaded by a specific user.
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -92,10 +92,6 @@ def get_all_documents(user_id: str) -> List[dict]:
             return documents
 
 def delete_document(document_id: str, user_id: str) -> bool:
-    """
-    Deletes a document. 
-    Thanks to ON DELETE CASCADE, this will also wipe out all associated chunks.
-    """
     with get_connection() as conn:
         with conn.cursor() as cur:
             # Enforce user_id so users can't delete other people's files
@@ -115,26 +111,24 @@ def delete_document(document_id: str, user_id: str) -> bool:
         
 
 def search_similar_chunks(user_id: str, query_vector: List[float], top_k: int = 5, threshold: float = 0.3) -> List[dict]:
-    """
-    Finds the most similar chunks to a query vector using Cosine Distance (<=>).
-    Converts distance to similarity (1 - distance) and filters out low matches.
-    """
+    # Finds the most similar chunks to a query vector using Cosine Distance (<=>).
     with get_connection() as conn:
         with conn.cursor() as cur:
+            cur.execute("SET LOCAL hnsw.ef_search = %s;", (top_k * 10,))
             cur.execute(
                 """
                 SELECT
                     c.content,
                     d.filename,
-                    1 - (c.embedding <=> %s) as similarity
+                    1 - (c.embedding <=> %s::vector) as similarity
                 FROM chunks c
                 JOIN documents d ON c.document_id = d.id
                 WHERE d.user_id = %s
-                  AND 1 - (c.embedding <=> %s) >= %s
-                ORDER BY c.embedding <=> %s
+                  AND 1 - (c.embedding <=> %s::vector) >= %s
+                ORDER BY c.embedding <=> %s::vector
                 LIMIT %s;
                 """,
-                # pass the vector 3 times because it's used in the SELECT, WHERE, and ORDER BY clauses
+                # We pass the vector 3 times because it's used in the SELECT, WHERE, and ORDER BY clauses
                 (query_vector, user_id, query_vector, threshold, query_vector, top_k)
             )
             rows = cur.fetchall()

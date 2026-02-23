@@ -23,8 +23,10 @@ def clean_extracted_text(raw_text: str) -> str:
     
     return text.strip()
 
+
+
 def parse_pdf(file_path: str) -> str:
-    """Extracts text from a PDF file using pypdf."""
+    # Extracts text from a PDF file using pypdf.
     try:
         reader = PdfReader(file_path) 
         raw_text = ""
@@ -36,14 +38,17 @@ def parse_pdf(file_path: str) -> str:
         return clean_extracted_text(raw_text)
     except Exception as e:
         raise ValueError(f"Failed to parse PDF: {str(e)}")
+    
+
 
 def parse_txt(file_path: str) -> str:
-    """Reads a standard text file."""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             return clean_extracted_text(f.read())
     except Exception as e:
         raise ValueError(f"Failed to parse TXT: {str(e)}")
+    
+
 
 def parse_md(file_path: str) -> str:
     """Reads a Markdown file."""
@@ -53,12 +58,11 @@ def parse_md(file_path: str) -> str:
             return f.read().strip()
     except Exception as e:
         raise ValueError(f"Failed to parse MD: {str(e)}")
+    
+
 
 def parse_file(file_path: str) -> str:
-    """
-    The master router. Takes a file path, checks the extension, 
-    and passes it to the correct extraction function.
-    """
+    # Takes a file path, checks the extension, and passes it to the correct extraction function.
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
         
