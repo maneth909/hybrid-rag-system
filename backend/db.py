@@ -114,7 +114,7 @@ def search_similar_chunks(user_id: str, query_vector: List[float], top_k: int = 
     # Finds the most similar chunks to a query vector using Cosine Distance (<=>).
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SET LOCAL hnsw.ef_search = %s;", (top_k * 10,))
+            cur.execute(f"SET LOCAL hnsw.ef_search = {top_k * 10}")
             cur.execute(
                 """
                 SELECT
@@ -141,3 +141,69 @@ def search_similar_chunks(user_id: str, query_vector: List[float], top_k: int = 
                     "similarity": round(row[2], 3)
                 })
             return results
+
+
+# --- CONVERSATION MANAGEMENT ---
+def create_conversation(user_id: str, title: str) -> str:
+    # Creates a new conversation and returns its UUID.
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO conversations (user_id, title) VALUES (%s, %s) RETURNING id;",
+                (user_id, title)
+            )
+            return str(cur.fetchone()[0])
+
+def add_message(conversation_id: str, role: str, content: str):
+    # Adds a message (user or assistant) to a conversation.
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO messages (conversation_id, role, content) VALUES (%s, %s, %s);",
+                (conversation_id, role, content)
+            )
+            conn.commit()
+
+def get_user_conversations(user_id: str) -> List[dict]:
+    # Returns all conversations for a user, sorted by newest first.
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, title, created_at FROM conversations WHERE user_id = %s ORDER BY created_at DESC;",
+                (user_id,)
+            )
+            rows = cur.fetchall()
+            return [{"id": str(row[0]), "title": row[1], "created_at": row[2]} for row in rows]
+
+def get_conversation_messages(conversation_id: str) -> List[dict]:
+    # Returns full chat history for a specific conversation.
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT role, content FROM messages WHERE conversation_id = %s ORDER BY created_at ASC;",
+                (conversation_id,)
+            )
+            rows = cur.fetchall()
+            return [{"role": row[0], "content": row[1]} for row in rows]
+        
+def update_conversation_title(conversation_id: str, new_title: str):
+    # Updates the title of a specific conversation.
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE conversations SET title = %s WHERE id = %s;",
+                (new_title, conversation_id)
+            )
+            conn.commit()
+
+def delete_conversation(conversation_id: str, user_id: str) -> bool:
+    # Deletes a conversation and all its messages.
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM conversations WHERE id = %s AND user_id = %s RETURNING id;",
+                (conversation_id, user_id)
+            )
+            deleted_id = cur.fetchone()
+            conn.commit()
+            return deleted_id is not None

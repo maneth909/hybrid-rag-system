@@ -4,11 +4,12 @@ from fastapi.middleware.cors import CORSMiddleware
 import json
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from typing import Optional
 
 from ml.parser import parse_file
 from ml.chunker import recursive_chunker
 from ml.embedder import generate_embeddings
-from db import save_ingestion_data, get_all_documents, delete_document
+from db import save_ingestion_data, get_all_documents, delete_document, create_conversation, add_message, get_user_conversations, get_conversation_messages, update_conversation_title, delete_conversation
 
 # RAG
 from ml.similarity import retrieve_context
@@ -31,12 +32,16 @@ MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 # 10 MB strict limit
 class QueryRequest(BaseModel):
     query: str
     user_id: str
+    conversation_id: Optional[str] = None
     top_k: int = 5
 
 class QueryResponse(BaseModel):
     answer: str
     sources: list[dict]
     chunks_found: int
+
+class UpdateConversationRequest(BaseModel):
+    title: str
 
 @app.post("/api/ingest")
 async def ingest_file(
@@ -174,10 +179,29 @@ async def query_documents(request: QueryRequest):
 
 @app.post("/api/query/stream")
 async def query_documents_stream(request: QueryRequest):
-    # Streaming endpoint that yields tokens as they arrive from Groq.
-    
+    # 1. Handle Conversation ID (Create new if not provided)
+    conversation_id = request.conversation_id
+    new_title = None
+
+    if not conversation_id:
+        # Generate a smart title using the LLM
+        groq = GroqClient()
+        new_title = groq.generate_chat_title(request.query)
+        conversation_id = create_conversation(request.user_id, new_title)
+
+    # 2. Save User Message immediately
+    add_message(conversation_id, "user", request.query)
+
     async def generate():
         try:
+            # Send the conversation ID (and title if new) to the frontend first
+            meta_payload = json.dumps({
+                "type": "meta", 
+                "conversation_id": conversation_id, 
+                "title": new_title
+            })
+            yield f"data: {meta_payload}\n\n"
+
             # 1. Retrieve chunks
             chunks = retrieve_context(request.query, request.user_id, request.top_k)
 
@@ -189,38 +213,70 @@ async def query_documents_stream(request: QueryRequest):
                 }
                 for chunk in chunks
             ]
-
-            # Yield sources to the frontend immediately so the UI can update
             sources_payload = json.dumps({"type": "sources", "data": sources})
             yield f"data: {sources_payload}\n\n"
 
             if not chunks:
-                # Extracted variables to avoid f-string backslash errors!
-                empty_msg = "I couldn't find any relevant information in your documents."
-                empty_payload = json.dumps({"type": "token", "data": empty_msg})
-                done_payload = json.dumps({"type": "done"})
-                
-                yield f"data: {empty_payload}\n\n"
-                yield f"data: {done_payload}\n\n"
-                return
+                 pass 
 
-            # 2. Build prompt
+            # 2. Build Prompt & Generate
             prompt = build_rag_prompt(request.query, chunks)
             groq = GroqClient()
+            
+            full_answer = "" 
 
-            # 3. Stream tokens live
             for token in groq.generate_stream(prompt):
+                full_answer += token
                 token_payload = json.dumps({"type": "token", "data": token})
                 yield f"data: {token_payload}\n\n"
+            
+            # 3. Save Assistant Response to DB
+            add_message(conversation_id, "assistant", full_answer)
 
-            # 4. Signal completion
+            # 4. Signal Done
             final_payload = json.dumps({"type": "done"})
             yield f"data: {final_payload}\n\n"
 
-        # This was the missing except block!
         except Exception as e:
             error_payload = json.dumps({"type": "error", "data": str(e)})
             yield f"data: {error_payload}\n\n"
 
-    # Return as an Event Stream so the browser knows to keep the connection open
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+@app.get("/api/conversations")
+async def list_user_conversations(user_id: str):
+    # Returns a list of all conversations for the sidebar.
+    try:
+        conversations = get_user_conversations(user_id)
+        return {"conversations": conversations}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/conversations/{conversation_id}")
+async def get_conversation(conversation_id: str):
+    # Returns the message history for a specific chat.
+    try:
+        messages = get_conversation_messages(conversation_id)
+        return {"messages": messages}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.put("/api/conversations/{conversation_id}")
+async def update_conversation_endpoint(conversation_id: str, request: UpdateConversationRequest):
+    # Renames a conversation.
+    try:
+        update_conversation_title(conversation_id, request.title)
+        return {"status": "success", "id": conversation_id, "title": request.title}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation_endpoint(conversation_id: str, user_id: str):
+    # Deletes a conversation.
+    try:
+        success = delete_conversation(conversation_id, user_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Conversation not found or access denied")
+        return {"status": "success", "id": conversation_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
