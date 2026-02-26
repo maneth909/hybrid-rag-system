@@ -52,3 +52,23 @@ class GroqClient:
             max_tokens=20
         )
         return response.choices[0].message.content.strip()
+    
+    def generate_document_title(self, content_snippet: str) -> str:
+        # Generates a short (3-5 words) filename for the document content.
+        system_prompt = "You are a concise document namer. Create a filename (max 5 words, no extension) for this text. Do not use quotes or special characters."
+        
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": content_snippet}
+                ],
+                temperature=0.3,
+                max_tokens=20
+            )
+            # Clean up the response
+            title = response.choices[0].message.content.strip().replace('"', '').replace("'", "")
+            return title
+        except Exception:
+            return "Untitled_Document"

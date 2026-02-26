@@ -43,35 +43,53 @@ class QueryResponse(BaseModel):
 class UpdateConversationRequest(BaseModel):
     title: str
 
+
 @app.post("/api/ingest")
 async def ingest_file(
     file: UploadFile = File(...),
     user_id: str = Form(...) 
 ):
-    # Missing file handling
+    # 1. Validation Checks
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided.")
         
-    # Unsuported file type handling
     ext = file.filename.split('.')[-1].lower()
     if ext not in ['pdf', 'txt', 'md']:
         raise HTTPException(status_code=400, detail="Unsupported file type. Only PDF, TXT, and MD are allowed.")
         
-    # Empty or oversized file handling
     file_bytes = await file.read()
     if len(file_bytes) == 0:
         raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+
     if len(file_bytes) > MAX_FILE_SIZE_BYTES:
-        raise HTTPException(status_code=413, detail=f"File too large. Max size is {MAX_FILE_SIZE_BYTES / 1024 / 1024}MB.")
-        
-    # Save safely to a temporary file for the parser to read
+        raise HTTPException(status_code=413, detail="File too large.")
+
+    final_filename = file.filename
+    
+    # Check if this file came from our "Paste Text" feature
+    if file.filename.startswith("snippet-"):
+        try:
+            # Decode the first 1000 characters to give the AI context
+            text_preview = file_bytes.decode("utf-8")[:300]
+            
+            # Ask Groq to generate a better title
+            groq = GroqClient()
+            new_title = groq.generate_document_title(text_preview)
+            
+            # Ensure we keep the .txt extension
+            final_filename = f"{new_title}.txt"
+        except Exception as e:
+            print(f"AI renaming failed, keeping original name: {e}")
+    # -----------------------------------
+
+    # 2. Save to Temp File
     temp_file_path = f"temp_{file.filename}"
+    
     try:
         with open(temp_file_path, "wb") as f:
             f.write(file_bytes)
             
         # --- THE INGESTION PIPELINE ---
-
         # Step A: Parse
         raw_text = parse_file(temp_file_path)
         if not raw_text.strip():
@@ -84,14 +102,13 @@ async def ingest_file(
         try:
             embeddings = generate_embeddings(chunks)
         except Exception as e:
-            # Error Handling: Ollama is down or missing the model
             raise HTTPException(status_code=503, detail=f"AI Service Error: {str(e)}")
             
         # Step D: Save to Database
         try:
             document_id = save_ingestion_data(
                 user_id=user_id,
-                filename=file.filename,
+                filename=final_filename, 
                 file_type=ext,
                 content=raw_text,
                 chunks=chunks,
@@ -103,11 +120,12 @@ async def ingest_file(
         return {
             "message": "File successfully ingested.",
             "document_id": document_id,
+            "filename": final_filename,
             "chunks_created": len(chunks)
         }
         
     finally:
-        # Cleanup the remporary file in all cases
+        # Cleanup
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
 

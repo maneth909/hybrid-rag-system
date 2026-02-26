@@ -13,7 +13,7 @@ interface Message {
   sources?: Source[];
 }
 
-// 1. UPDATE: New props to handle conversation state
+// New props to handle conversation state
 interface ChatAreaProps {
   userId: string;
   chatId: string | null;
@@ -30,7 +30,7 @@ export default function ChatArea({
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // 2. NEW: Fetch chat history when the selected chatId changes
+  // 2. Fetch chat history when the selected chatId changes
   useEffect(() => {
     if (!chatId) {
       setMessages([]); // Reset for "New Chat" screen
@@ -106,7 +106,7 @@ export default function ChatArea({
             try {
               const payload = JSON.parse(line.slice(6));
 
-              // 4. NEW: Handle the "meta" event for new conversations
+              // 4. Handle the "meta" event for new conversations
               if (payload.type === "meta") {
                 // If this was a new chat, the backend just sent us the new ID.
                 // Notify the parent so it can highlight the correct sidebar item.
