@@ -8,6 +8,9 @@ def clean_extracted_text(raw_text: str) -> str:
         
     # replace weird unicode spaces
     text = raw_text.replace('\xa0', ' ')
+
+    # hyphenated words split across lines (e.g. "commu-\nnication" -> "communication")
+    text = re.sub(r'(\w+)-\n(\w+)', r'\1\2', text)
     
     # preserve deliberate paragraph breaks (double newlines)
     text = re.sub(r'\n{2,}', '||PARAGRAPH||', text)
