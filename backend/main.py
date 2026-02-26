@@ -1,4 +1,6 @@
 import os
+import re
+import uuid
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 import json
@@ -64,39 +66,43 @@ async def ingest_file(
     if len(file_bytes) > MAX_FILE_SIZE_BYTES:
         raise HTTPException(status_code=413, detail="File too large.")
 
+    # --- AI RENAMING LOGIC ---
     final_filename = file.filename
-    
-    # Check if this file came from our "Paste Text" feature
     if file.filename.startswith("snippet-"):
         try:
-            # Decode the first 1000 characters to give the AI context
             text_preview = file_bytes.decode("utf-8")[:300]
-            
-            # Ask Groq to generate a better title
             groq = GroqClient()
             new_title = groq.generate_document_title(text_preview)
-            
-            # Ensure we keep the .txt extension
             final_filename = f"{new_title}.txt"
         except Exception as e:
             print(f"AI renaming failed, keeping original name: {e}")
-    # -----------------------------------
 
-    # 2. Save to Temp File
-    temp_file_path = f"temp_{file.filename}"
+    # 2. Save to Temp File 
+    random_id = str(uuid.uuid4())
+    temp_file_path = f"temp_{random_id}_{file.filename}"
     
     try:
         with open(temp_file_path, "wb") as f:
             f.write(file_bytes)
             
         # --- THE INGESTION PIPELINE ---
+        
         # Step A: Parse
         raw_text = parse_file(temp_file_path)
-        if not raw_text.strip():
+        clean_text = re.sub(r'\s+', ' ', raw_text).strip()
+        
+        # print(f"-- DEBUG: CLEANED TEXT for {final_filename} --")
+        # print(f"'{clean_text[:200]}...'") 
+        # print("--------------------------------------------")
+        
+        if not clean_text:
             raise HTTPException(status_code=400, detail="Could not extract any text from the file.")
             
-        # Step B: Chunk
-        chunks = recursive_chunker(raw_text, chunk_size=800, overlap=200)
+        # Step B: Chunk (Use clean_text)
+        chunks = recursive_chunker(clean_text, chunk_size=800, overlap=200)
+        
+        if not chunks:
+             raise HTTPException(status_code=400, detail="File text is too short to process.")
         
         # Step C: Embed
         try:
@@ -110,7 +116,7 @@ async def ingest_file(
                 user_id=user_id,
                 filename=final_filename, 
                 file_type=ext,
-                content=raw_text,
+                content=clean_text, 
                 chunks=chunks,
                 embeddings=embeddings
             )
