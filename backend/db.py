@@ -110,7 +110,7 @@ def delete_document(document_id: str, user_id: str) -> bool:
             return deleted_id is not None
         
 
-def search_similar_chunks(user_id: str, query_vector: List[float], top_k: int = 5, threshold: float = 0.3) -> List[dict]:
+def search_dense_chunks(user_id: str, query_vector: List[float], top_k: int = 5, threshold: float = 0.3) -> List[dict]:
     # Finds the most similar chunks to a query vector using Cosine Distance (<=>).
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -128,7 +128,6 @@ def search_similar_chunks(user_id: str, query_vector: List[float], top_k: int = 
                 ORDER BY c.embedding <=> %s::vector
                 LIMIT %s;
                 """,
-                # We pass the vector 3 times because it's used in the SELECT, WHERE, and ORDER BY clauses
                 (query_vector, user_id, query_vector, threshold, query_vector, top_k)
             )
             rows = cur.fetchall()
@@ -140,6 +139,43 @@ def search_similar_chunks(user_id: str, query_vector: List[float], top_k: int = 
                     "filename": row[1],
                     "similarity": round(row[2], 3)
                 })
+            return results
+
+
+def search_keyword_chunks(user_id: str, search_terms: str, top_k: int = 5) -> List[dict]:
+    # Performs full-text search using PostgreSQL's ts_rank_cd.
+    if not search_terms:
+        return []
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    c.content,
+                    d.filename,
+                    ts_rank_cd(to_tsvector('english', c.content), query) as score,
+                    c.id as chunk_id
+                FROM chunks c
+                JOIN documents d ON c.document_id = d.id
+                , to_tsquery('english', %s) query
+                WHERE d.user_id = %s
+                  AND to_tsvector('english', c.content) @@ query
+                ORDER BY score DESC
+                LIMIT %s;
+            """, (search_terms, user_id, top_k))
+            
+            rows = cur.fetchall()
+            
+            # Format results
+            results = []
+            for row in rows:
+                results.append({
+                    "content": row[0],
+                    "filename": row[1],
+                    "score": float(row[2]), 
+                    "chunk_id": str(row[3])
+                })
+                
             return results
 
 

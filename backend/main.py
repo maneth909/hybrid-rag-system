@@ -13,8 +13,9 @@ from ml.chunker import recursive_chunker
 from ml.embedder import generate_embeddings
 from db import save_ingestion_data, get_all_documents, delete_document, create_conversation, add_message, get_user_conversations, get_conversation_messages, update_conversation_title, delete_conversation
 
-# RAG
-from ml.similarity import retrieve_context
+from ml.dense_search import dense_search
+from ml.keyword_search import search_keywords
+from ml.hybrid_search import hybrid_search
 from prompt_builder import build_rag_prompt
 from groq_client import GroqClient
 
@@ -98,7 +99,7 @@ async def ingest_file(
         if not clean_text:
             raise HTTPException(status_code=400, detail="Could not extract any text from the file.")
             
-        # Step B: Chunk (Use clean_text)
+        # Step B: Chunk
         chunks = recursive_chunker(clean_text, chunk_size=800, overlap=200)
         
         if not chunks:
@@ -167,25 +168,27 @@ async def remove_document(document_id: str, user_id: str):
 # --- RAG QUERY ENDPOINTS ---
 @app.post("/api/query", response_model=QueryResponse)
 async def query_documents(request: QueryRequest):
-    # Standard query endpoint that waits for the full answer before responding.
     try:
-        # 1. Retrieve relevant chunks
-        chunks = retrieve_context(request.query, request.user_id, request.top_k)
+        # 1. Retrieve relevant chunks (Hybrid)
+        chunks = hybrid_search(request.query, request.user_id, request.top_k)
 
         # 2. Format sources for the response
         sources = [
             {
                 "filename": chunk["filename"],
                 "content_preview": chunk["content"][:200] + "...",
-                "similarity": chunk["similarity"]
+                
+                # Use the 'score' (RRF score) as the primary metric 
+                "score": chunk.get("score", 0), 
+                # 'similarity' is not directly comparable in hybrid search
+                "similarity": chunk.get("similarity", 0) 
             }
             for chunk in chunks
         ]
 
-        # Handle empty results
         if not chunks:
             return QueryResponse(
-                answer="I couldn't find any relevant information in your documents.",
+                answer="I couldn't find any relevant information.",
                 sources=[],
                 chunks_found=0
             )
@@ -203,22 +206,19 @@ async def query_documents(request: QueryRequest):
 
 @app.post("/api/query/stream")
 async def query_documents_stream(request: QueryRequest):
-    # 1. Handle Conversation ID (Create new if not provided)
     conversation_id = request.conversation_id
     new_title = None
 
     if not conversation_id:
-        # Generate a smart title using the LLM
         groq = GroqClient()
         new_title = groq.generate_chat_title(request.query)
         conversation_id = create_conversation(request.user_id, new_title)
 
-    # 2. Save User Message immediately
     add_message(conversation_id, "user", request.query)
 
     async def generate():
         try:
-            # Send the conversation ID (and title if new) to the frontend first
+            # Send Meta Data
             meta_payload = json.dumps({
                 "type": "meta", 
                 "conversation_id": conversation_id, 
@@ -226,44 +226,37 @@ async def query_documents_stream(request: QueryRequest):
             })
             yield f"data: {meta_payload}\n\n"
 
-            # 1. Retrieve chunks
-            chunks = retrieve_context(request.query, request.user_id, request.top_k)
+            # 1. Retrieve chunks (Hybrid)
+            chunks = hybrid_search(request.query, request.user_id, request.top_k)
 
+            # 2. Send Sources 
             sources = [
                 {
                     "filename": chunk["filename"],
                     "content_preview": chunk["content"][:200] + "...",
-                    "similarity": chunk["similarity"]
+                    "score": chunk.get("score", 0), # Hybrid RRF Score
+                    "similarity": chunk.get("similarity", 0) # Fallback/Debug info
                 }
                 for chunk in chunks
             ]
             sources_payload = json.dumps({"type": "sources", "data": sources})
             yield f"data: {sources_payload}\n\n"
 
-            if not chunks:
-                 pass 
-
-            # 2. Build Prompt & Generate
+            
             prompt = build_rag_prompt(request.query, chunks)
             groq = GroqClient()
             
             full_answer = "" 
-
             for token in groq.generate_stream(prompt):
                 full_answer += token
                 token_payload = json.dumps({"type": "token", "data": token})
                 yield f"data: {token_payload}\n\n"
             
-            # 3. Save Assistant Response to DB
             add_message(conversation_id, "assistant", full_answer)
-
-            # 4. Signal Done
-            final_payload = json.dumps({"type": "done"})
-            yield f"data: {final_payload}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
         except Exception as e:
-            error_payload = json.dumps({"type": "error", "data": str(e)})
-            yield f"data: {error_payload}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -304,3 +297,4 @@ async def delete_conversation_endpoint(conversation_id: str, user_id: str):
         return {"status": "success", "id": conversation_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
