@@ -3,6 +3,7 @@ from pgvector.psycopg import register_vector
 from typing import List
 from dotenv import load_dotenv
 import os
+from typing import List, Optional
 
 load_dotenv()
 
@@ -110,13 +111,14 @@ def delete_document(document_id: str, user_id: str) -> bool:
             return deleted_id is not None
         
 
-def search_dense_chunks(user_id: str, query_vector: List[float], top_k: int = 5, threshold: float = 0.3) -> List[dict]:
+def search_dense_chunks(user_id: str, query_vector: List[float], top_k: int = 5, threshold: float = 0.3, document_ids: Optional[List[str]] = None) -> List[dict]:
     # Finds the most similar chunks to a query vector using Cosine Distance (<=>).
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(f"SET LOCAL hnsw.ef_search = {top_k * 10}")
-            cur.execute(
-                """
+            
+            # 1. Base Query
+            base_query = """
                 SELECT
                     c.content,
                     d.filename,
@@ -125,11 +127,19 @@ def search_dense_chunks(user_id: str, query_vector: List[float], top_k: int = 5,
                 JOIN documents d ON c.document_id = d.id
                 WHERE d.user_id = %s
                   AND 1 - (c.embedding <=> %s::vector) >= %s
-                ORDER BY c.embedding <=> %s::vector
-                LIMIT %s;
-                """,
-                (query_vector, user_id, query_vector, threshold, query_vector, top_k)
-            )
+            """
+            params = [query_vector, user_id, query_vector, threshold]
+
+            # 2. Dynamically add the document filter if there are checked files
+            if document_ids:
+                base_query += " AND d.id = ANY(%s::uuid[])"
+                params.append(document_ids)
+
+            # 3. Add the order and limit clauses
+            base_query += " ORDER BY c.embedding <=> %s::vector LIMIT %s;"
+            params.extend([query_vector, top_k])
+
+            cur.execute(base_query, params)
             rows = cur.fetchall()
             
             results = []
@@ -142,14 +152,15 @@ def search_dense_chunks(user_id: str, query_vector: List[float], top_k: int = 5,
             return results
 
 
-def search_keyword_chunks(user_id: str, search_terms: str, top_k: int = 5) -> List[dict]:
+def search_keyword_chunks(user_id: str, search_terms: str, top_k: int = 5, document_ids: Optional[List[str]] = None) -> List[dict]:
     # Performs full-text search using PostgreSQL's ts_rank_cd.
     if not search_terms:
         return []
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("""
+            # 1. Base Query
+            base_query = """
                 SELECT
                     c.content,
                     d.filename,
@@ -160,13 +171,21 @@ def search_keyword_chunks(user_id: str, search_terms: str, top_k: int = 5) -> Li
                 , to_tsquery('english', %s) query
                 WHERE d.user_id = %s
                   AND to_tsvector('english', c.content) @@ query
-                ORDER BY score DESC
-                LIMIT %s;
-            """, (search_terms, user_id, top_k))
-            
+            """
+            params = [search_terms, user_id]
+
+            # 2. Dynamically add the document filter if there are checked files
+            if document_ids:
+                base_query += " AND d.id = ANY(%s::uuid[])"
+                params.append(document_ids)
+
+            # 3. Add the order and limit clauses
+            base_query += " ORDER BY score DESC LIMIT %s;"
+            params.append(top_k)
+
+            cur.execute(base_query, params)
             rows = cur.fetchall()
             
-            # Format results
             results = []
             for row in rows:
                 results.append({

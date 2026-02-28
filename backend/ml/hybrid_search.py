@@ -1,12 +1,12 @@
 # Combines Dense (Vector) and Sparse (Keyword) search results using Reciprocal Rank Fusion (RRF).
 
-from typing import List, Dict
+from typing import List, Dict, Optional
 from ml.dense_search import dense_search
 from ml.keyword_search import search_keywords
 
-def hybrid_search(query: str, user_id: str, top_k: int = 5) -> List[Dict]:
-    dense_results = dense_search(query, user_id, top_k=top_k * 2)
-    keyword_results = search_keywords(query, user_id, top_k=top_k * 2)
+def hybrid_search(query: str, user_id: str, top_k: int = 5, document_ids: Optional[List[str]] = None) -> List[Dict]:
+    dense_results = dense_search(query, user_id, top_k=top_k * 2, document_ids=document_ids)
+    keyword_results = search_keywords(query, user_id, top_k=top_k * 2, document_ids=document_ids)
     
     # RRF Algorithm (Reciprocal Rank Fusion)
     k = 60

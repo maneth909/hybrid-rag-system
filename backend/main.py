@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import json
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 from ml.parser import parse_file
 from ml.chunker import recursive_chunker
@@ -37,6 +37,7 @@ class QueryRequest(BaseModel):
     user_id: str
     conversation_id: Optional[str] = None
     top_k: int = 5
+    document_ids: Optional[List[str]] = None
 
 class QueryResponse(BaseModel):
     answer: str
@@ -170,7 +171,7 @@ async def remove_document(document_id: str, user_id: str):
 async def query_documents(request: QueryRequest):
     try:
         # 1. Retrieve relevant chunks (Hybrid)
-        chunks = hybrid_search(request.query, request.user_id, request.top_k)
+        chunks = hybrid_search(request.query, request.user_id, request.top_k, request.document_ids)
 
         # 2. Format sources for the response
         sources = [
@@ -227,7 +228,7 @@ async def query_documents_stream(request: QueryRequest):
             yield f"data: {meta_payload}\n\n"
 
             # 1. Retrieve chunks (Hybrid)
-            chunks = hybrid_search(request.query, request.user_id, request.top_k)
+            chunks = chunks = hybrid_search(request.query, request.user_id, request.top_k, request.document_ids)
 
             # 2. Send Sources 
             sources = [
