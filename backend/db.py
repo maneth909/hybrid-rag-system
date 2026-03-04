@@ -4,6 +4,7 @@ from typing import List
 from dotenv import load_dotenv
 import os
 from typing import List, Optional
+import json
 
 load_dotenv()
 
@@ -209,13 +210,16 @@ def create_conversation(user_id: str, title: str) -> str:
             )
             return str(cur.fetchone()[0])
 
-def add_message(conversation_id: str, role: str, content: str):
+def add_message(conversation_id: str, role: str, content: str, sources: Optional[List[dict]] = None):
     # Adds a message (user or assistant) to a conversation.
+    if sources is None:
+        sources = []
+        
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO messages (conversation_id, role, content) VALUES (%s, %s, %s);",
-                (conversation_id, role, content)
+                "INSERT INTO messages (conversation_id, role, content, sources) VALUES (%s, %s, %s, %s);",
+                (conversation_id, role, content, json.dumps(sources))
             )
             conn.commit()
 

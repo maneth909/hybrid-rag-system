@@ -228,7 +228,7 @@ async def query_documents_stream(request: QueryRequest):
             yield f"data: {meta_payload}\n\n"
 
             # 1. Retrieve chunks (Hybrid)
-            chunks = chunks = hybrid_search(request.query, request.user_id, request.top_k, request.document_ids)
+            chunks = hybrid_search(request.query, request.user_id, request.top_k, request.document_ids)
 
             # 2. Send Sources 
             sources = [
@@ -253,7 +253,7 @@ async def query_documents_stream(request: QueryRequest):
                 token_payload = json.dumps({"type": "token", "data": token})
                 yield f"data: {token_payload}\n\n"
             
-            add_message(conversation_id, "assistant", full_answer)
+            add_message(conversation_id, "assistant", full_answer, sources)
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
         except Exception as e:
