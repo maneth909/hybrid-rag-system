@@ -13,6 +13,7 @@
   --color-border: var(--color-border);
   --color-error: var(--color-error);
   --color-inputboxbg: var(--color-inputboxbg);
+  --color-chatinputboxbg: var(--color-inputboxbg);
 }
 
 /* DARK MODE SETUP */
@@ -34,10 +35,28 @@
     var(--color-secondary) 15%,
     transparent
   );
+  --color-chatinputboxbg: color-mix(
+    in srgb,
+    var(--color-secondary) 15%,
+    transparent
+  );
 }
 
-.dark {
+/* .dark {
   --color-background: #2c2c2c;
+  --color-secondary: #18181b;
+  --color-primary: #60a5fa;
+  --color-blackcolor: #fafafa;
+  --color-whitecolor: #ffffff;
+  --color-tertiary: #fafafa;
+  --color-muted: #a1a1aa;
+  --color-border: #38383f;
+  --color-error: #f87171;
+  --color-inputboxbg: #525252;
+} */
+
+.dark {
+  --color-background: #272729;
   --color-secondary: #18181b;
   --color-primary: #60a5fa;
   --color-blackcolor: #fafafa;
@@ -51,6 +70,7 @@
     var(--color-secondary) 15%,
     transparent
   );
+  --color-chatinputboxbg: #3f3f41;
 }
 
 /* GLOBAL RESETS */

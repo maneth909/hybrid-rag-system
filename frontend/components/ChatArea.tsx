@@ -1,41 +1,66 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, Loader2, FileText, Bot, User } from "lucide-react";
+import { FileText, Sparkles, Copy, Check, ChevronDown } from "lucide-react";
+import ChatInputBox from "./ChatInputBox";
+import SpaceBackground from "./SpaceBackground";
 
-interface Source {
+export interface Source {
   filename: string;
   content_preview: string;
-  similarity: number;
+  score?: number;
+  similarity?: number;
 }
 
-interface Message {
+export interface Message {
   role: "user" | "assistant";
   content: string;
   sources?: Source[];
 }
 
-// New props to handle conversation state
 interface ChatAreaProps {
   userId: string;
   chatId: string | null;
   onChatCreated: (chatId: string) => void;
+  selectedDocs: string[];
 }
+
+// Helper function to remove duplicate filenames
+const getUniqueSources = (sources?: Source[]) => {
+  if (!sources || sources.length === 0) return [];
+  const unique = new Map<string, Source>();
+  sources.forEach((src) => {
+    const existing = unique.get(src.filename);
+    const currentScore = src.score || src.similarity || 0;
+    const existingScore = existing
+      ? existing.score || existing.similarity || 0
+      : -1;
+    if (!existing || currentScore > existingScore) {
+      unique.set(src.filename, src);
+    }
+  });
+  return Array.from(unique.values());
+};
 
 export default function ChatArea({
   userId,
   chatId,
   onChatCreated,
+  selectedDocs,
 }: ChatAreaProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // 2. Fetch chat history when the selected chatId changes
+  const isStreamingRef = useRef(false);
+
   useEffect(() => {
     if (!chatId) {
-      setMessages([]); // Reset for "New Chat" screen
+      setMessages([]);
       return;
     }
+
+    if (isStreamingRef.current) return;
 
     const fetchHistory = async () => {
       setIsLoading(true);
@@ -63,12 +88,14 @@ export default function ChatArea({
     scrollToBottom();
   }, [messages]);
 
-  const handleSubmit = async (e?: React.FormEvent) => {
+  const handleSubmit = async (e?: React.FormEvent | React.KeyboardEvent) => {
     if (e) e.preventDefault();
     if (!input.trim() || isLoading) return;
 
     const userMessage = input.trim();
     setInput("");
+
+    isStreamingRef.current = true;
 
     setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
     setIsLoading(true);
@@ -84,8 +111,9 @@ export default function ChatArea({
         body: JSON.stringify({
           query: userMessage,
           user_id: userId,
-          conversation_id: chatId, // 3. UPDATE: Send the current chat ID (or null)
+          conversation_id: chatId,
           top_k: 5,
+          document_ids: selectedDocs,
         }),
       });
 
@@ -106,10 +134,7 @@ export default function ChatArea({
             try {
               const payload = JSON.parse(line.slice(6));
 
-              // 4. Handle the "meta" event for new conversations
               if (payload.type === "meta") {
-                // If this was a new chat, the backend just sent us the new ID.
-                // Notify the parent so it can highlight the correct sidebar item.
                 onChatCreated(payload.conversation_id);
                 continue;
               }
@@ -151,112 +176,165 @@ export default function ChatArea({
     }
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit(e);
+    }
+  };
+
+  const handleCopy = (content: string, index: number) => {
+    navigator.clipboard.writeText(content);
+    setCopiedIndex(index);
+    setTimeout(() => setCopiedIndex(null), 2000);
+  };
+
   return (
     <main className="flex-1 flex flex-col bg-background relative h-full">
-      <header className="p-4 border-b border-border flex items-center justify-between md:hidden">
-        <h2 className="font-semibold">Chat</h2>
-      </header>
-
-      <div className="flex-1 overflow-y-auto p-4 space-y-6">
-        {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center opacity-50">
-            <Bot size={48} className="mb-4 text-primary" />
-            <h1 className="text-2xl font-bold mb-2">
-              How can I help you today?
-            </h1>
-            <p className="text-sm">
-              Upload a document to the right and ask me anything about it.
-            </p>
+      {messages.length === 0 ? (
+        <div className="flex-1 flex flex-col items-center justify-center p-4 relative overflow-hidden bg-background">
+          <SpaceBackground />
+          <h1 className="z-10 text-2xl md:text-3xl font-medium text-whiteColor mb-8 text-center tracking-tight shadow-black drop-shadow-lg">
+            Ask anything about your documents.
+          </h1>
+          <div className="z-10 w-full">
+            <ChatInputBox
+              input={input}
+              setInput={setInput}
+              isLoading={isLoading}
+              handleSubmit={handleSubmit}
+              handleKeyDown={handleKeyDown}
+            />
           </div>
-        ) : (
-          messages.map((msg, idx) => (
-            <div
-              key={idx}
-              className={`flex gap-4 ${msg.role === "assistant" ? "bg-secondary/30 p-4 rounded-lg" : "pl-4"}`}
-            >
-              <div className="shrink-0 mt-1">
-                {msg.role === "assistant" ? (
-                  <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center text-primary">
-                    <Bot size={18} />
-                  </div>
-                ) : (
-                  <div className="w-8 h-8 bg-muted/20 rounded-full flex items-center justify-center text-blackcolor">
-                    <User size={18} />
-                  </div>
-                )}
-              </div>
+        </div>
+      ) : (
+        <>
+          <div className="flex-1 overflow-y-auto p-4 md:p-8 pb-24 space-y-8">
+            <div className="max-w-3xl mx-auto space-y-8">
+              {messages.map((msg, idx) => {
+                const uniqueSources = getUniqueSources(msg.sources);
 
-              <div className="flex-1 space-y-2 overflow-hidden">
-                <p className="leading-relaxed whitespace-pre-wrap">
-                  {msg.content}
-                </p>
-
-                {/* Citations Section */}
-                {msg.sources && msg.sources.length > 0 && (
-                  <div className="mt-4 pt-4 border-t border-border/50">
-                    <p className="text-xs font-semibold text-muted mb-2 uppercase tracking-wider">
-                      Sources
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {msg.sources.map((source, i) => (
-                        <div
-                          key={i}
-                          className="flex items-center gap-2 bg-background border border-border px-2.5 py-1.5 rounded text-xs text-muted hover:text-primary transition-colors cursor-help"
-                          title={`Similarity Score: ${source.similarity}`}
-                        >
-                          <FileText size={12} />
-                          <span className="truncate max-w-[150px] font-medium">
-                            {source.filename}
-                          </span>
-
-                          {/* Visible Score Bubble */}
-                          <span
-                            className={`px-1.5 py-0.5 rounded-full text-[10px] ${
-                              source.similarity > 0.8
-                                ? "bg-green-100 text-green-700"
-                                : "bg-yellow-100 text-yellow-700"
-                            }`}
+                return (
+                  <div key={idx} className="flex flex-col group relative">
+                    {msg.role === "user" ? (
+                      <div className="flex justify-end w-full group">
+                        <div className="flex items-center gap-3 max-w-[85%] md:max-w-[75%]">
+                          <button
+                            onClick={() => handleCopy(msg.content, idx)}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity gap-1.5 px-2 py-1 text-xs text-muted hover:text-blackcolor hover:bg-secondary rounded-md"
+                            title="Copy message"
                           >
-                            {Math.round(source.similarity * 100)}%
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          ))
-        )}
-        <div ref={messagesEndRef} />
-      </div>
+                            {copiedIndex === idx ? (
+                              <div className="flex items-center gap-1">
+                                <Check size={14} /> Copied!
+                              </div>
+                            ) : (
+                              <Copy size={14} />
+                            )}
+                          </button>
 
-      <div className="p-4 bg-background">
-        <form
-          onSubmit={handleSubmit}
-          className="flex items-center bg-inputboxbg border border-border rounded-lg px-4 py-3 focus-within:ring-2 focus-within:ring-primary transition-shadow"
-        >
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask a question about your documents..."
-            className="flex-1 bg-transparent outline-none border-none text-blackcolor placeholder-muted"
-            disabled={isLoading}
-          />
-          <button
-            type="submit"
-            disabled={isLoading || !input.trim()}
-            className="ml-3 text-primary hover:text-opacity-80 transition-colors disabled:opacity-50 flex items-center justify-center"
-          >
-            {isLoading ? (
-              <Loader2 size={20} className="animate-spin" />
-            ) : (
-              <Send size={20} />
-            )}
-          </button>
-        </form>
-      </div>
+                          <div className="bg-secondary/60 dark:bg-tertiary/10 text-blackcolor px-5 py-3 rounded-2xl shadow-sm whitespace-pre-wrap">
+                            {msg.content}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex gap-4 mb-4 relative">
+                        <div className="shrink-0 mt-1">
+                          <div className="w-6 h-6 flex items-center justify-center text-primary">
+                            <Sparkles
+                              size={20}
+                              fill="currentColor"
+                              className="opacity-80"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex-1 space-y-4 overflow-hidden min-w-0 pb-6">
+                          <p className="leading-relaxed whitespace-pre-wrap text-blackcolor mt-0.5">
+                            {msg.content}
+                          </p>
+
+                          {uniqueSources.length > 0 && (
+                            <div className="mt-4 pt-3 border-t border-border/50">
+                              <p className="text-xs font-semibold text-muted mb-3 flex items-center gap-2">
+                                <ChevronDown size={14} /> Sources
+                              </p>
+                              <div className="flex flex-wrap gap-2">
+                                {uniqueSources.map((source, i) => {
+                                  const hasSimilarity =
+                                    source.similarity && source.similarity > 0;
+                                  const displayScore = hasSimilarity
+                                    ? `${Math.round((source.similarity as number) * 100)}%`
+                                    : `${source.score?.toFixed(3)}`;
+
+                                  return (
+                                    <div
+                                      key={i}
+                                      className="flex items-center gap-2 bg-secondary/50 border border-border/60 px-3 py-1.5 rounded-md text-xs text-blackcolor hover:bg-secondary transition-colors cursor-help"
+                                      title={source.content_preview}
+                                    >
+                                      <FileText
+                                        size={12}
+                                        className="text-muted"
+                                      />
+                                      <span className="truncate max-w-[150px] font-medium">
+                                        {source.filename}
+                                      </span>
+                                      <span className="text-muted ml-1">
+                                        {displayScore}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="absolute bottom-0 left-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={() => handleCopy(msg.content, idx)}
+                              className="flex items-center gap-1.5 px-2 py-1 text-xs text-muted hover:text-blackcolor hover:bg-secondary rounded-md transition-colors"
+                            >
+                              {copiedIndex === idx ? (
+                                <div className="flex items-center gap-1">
+                                  <Check size={14} /> Copied!
+                                </div>
+                              ) : (
+                                <>
+                                  <Copy size={14} /> Copy
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              <div ref={messagesEndRef} />
+            </div>
+          </div>
+
+          <div className="relative w-full shrink-0">
+            <div className="absolute bottom-full left-0 w-full h-24 bg-linear-to-t from-background to-transparent pointer-events-none z-10"></div>
+
+            <div className="relative p-4 bg-background z-20">
+              <ChatInputBox
+                input={input}
+                setInput={setInput}
+                isLoading={isLoading}
+                handleSubmit={handleSubmit}
+                handleKeyDown={handleKeyDown}
+              />
+              <p className="text-center text-[10px] text-muted mt-3">
+                Consider verifying important information.
+              </p>
+            </div>
+          </div>
+        </>
+      )}
     </main>
   );
 }
