@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>Hybird RAG</h1>
+  <h1>Hybrid Search RAG Chat</h1>
 </div>
 
 A full-stack AI chat application that lets you upload documents and ask questions about them. It uses **Hybrid Retrieval-Augmented Generation (RAG)** to find the most relevant information from your files before generating answers.
